@@ -95,4 +95,59 @@ chosenBook = bookDao.getRandomBook()
 2. Build and run the application
 3. The app will crash on startup
 
-## Purpose
+## Generated Code Analysis
+
+To better understand the root cause of this crash, we have included sample generated Java code in the repository:
+
+- **`generated_dao_crash.java`**: Generated code that causes crash (from Room 2.8.3 with KSP)
+- **`generated_dao_not_crash.java`**: Generated code that works correctly (from Room 2.6.1 with KAPT)
+
+### Root Cause of the Crash
+
+The key difference between these two generated implementations lies in how they handle cursor positioning after collecting relation keys:
+
+#### Crash Version (generated_dao_crash.java)
+```java
+while (_stmt.step()) {
+    final long _tmpKey;
+    _tmpKey = _stmt.getLong(_columnIndexOfId);
+    if (!_collectionPages.containsKey(_tmpKey)) {
+        _collectionPages.put(_tmpKey, new ArrayList<Page>());
+    }
+}
+_stmt.reset();  // Line 17: This causes the problem!
+__fetchRelationshipPageAscomExampleOrderbyrandomsampleDbPage(_connection, _collectionPages);
+final Book _result;
+if (_stmt.step()) {  // Line 20: Reading data after reset
+    // ...
+}
+```
+
+**The Problem:** The `_stmt.reset()` call on line 17 causes the `ORDER BY RANDOM()` query to be **re-evaluated**. This means:
+1. First loop (lines 10-16): Collects IDs from the first random execution
+2. `reset()` call: Re-executes the query with a **different random order**
+3. Second read (line 20): Attempts to read data, but the ID may not match the previously collected IDs
+4. Result: The `_collectionPages.get(_tmpKey_1)` on line 30 may return `null`, causing a crash
+
+#### Working Version (generated_dao_not_crash.java)
+```java
+while (_cursor.moveToNext()) {
+    final long _tmpKey;
+    _tmpKey = _cursor.getLong(_cursorIndexOfId);
+    if (!_collectionPages.containsKey(_tmpKey)) {
+        _collectionPages.put(_tmpKey, new ArrayList<Page>());
+    }
+}
+_cursor.moveToPosition(-1);  // Line 24: Just resets cursor position
+__fetchRelationshipPageAscomExampleOrderbyrandomsampleDbPage(_collectionPages);
+final Book _result;
+if (_cursor.moveToFirst()) {  // Line 27: Reading from the same result set
+    // ...
+}
+```
+
+**Why It Works:** The `_cursor.moveToPosition(-1)` call on line 24 only resets the **cursor position** without re-executing the query. The same result set is maintained, ensuring the IDs collected in the first loop match the data read in the second step.
+
+### Language Generation Note
+
+**Note:** This issue occurs regardless of whether you generate Java or Kotlin code. When using `generateKotlin=true` in Room configuration, the same problematic pattern is generated in Kotlin, resulting in the identical crash. The underlying issue is in Room's code generation logic for handling relations with `ORDER BY RANDOM()`, not in the target language itself.
