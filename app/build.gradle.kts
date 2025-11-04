@@ -43,7 +43,7 @@ android {
     }
     room {
         schemaDirectory("$projectDir/schemas")
-        generateKotlin = false
+        // generateKotlin = false
     }
 
 }
